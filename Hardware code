@@ -1,0 +1,155 @@
+#include <TinyGPSPlus.h>
+#include "painlessMesh.h"
+#include <Arduino_JSON.h>
+
+//Ultrasonic sensor
+const int trigPin = 5;
+const int echoPin = 18;
+
+//define sound speed in cm/uS
+#define SOUND_SPEED 0.034
+#define CM_TO_INCH 0.393701
+
+long duration;
+float distanceCm;
+
+// MESH Details
+#define   MESH_PREFIX     "Darshit" //Wi-Fi name
+#define   MESH_PASSWORD   "Password" //password for your MESH
+#define   MESH_PORT       5555 //default port
+
+//GPS 
+// TinyGPSPlus gps;
+
+//Number for this node
+int nodeNumber = 3;
+
+//String to send to other nodes with sensor readings
+String readings;
+
+Scheduler userScheduler; // to control your personal task
+painlessMesh  mesh;
+
+// User stub
+void sendMessage() ; // Prototype so PlatformIO doesn't complain
+String getReadings(); // Prototype for sending sensor readings
+
+//Create tasks: to send messages and get readings;
+Task taskSendMessage(TASK_SECOND * 5 , TASK_FOREVER, &sendMessage);
+
+String getReadings () {
+  JSONVar jsonReadings;
+  jsonReadings["node"] = nodeNumber;
+  jsonReadings["latitude"] = 120;//gps.location.lat();
+  jsonReadings["longitude"] = 100;//gps.location.lng();
+  readings = JSON.stringify(jsonReadings);
+  return readings;
+}
+
+void sendMessage () {
+  String msg = getReadings();
+  mesh.sendBroadcast(msg);
+}
+
+//Init GPS
+void displayInfo()
+{
+  Serial.print(F("Location: "));
+  // if (!gps.location.isValid())
+  // {
+  //   Serial.print(F("INVALID"));
+  // }
+}
+
+// Needed for painless library
+void receivedCallback( uint32_t from, String &msg ) {
+  Serial.printf("Received from %u msg=%s\n", from, msg.c_str());
+  JSONVar myObject = JSON.parse(msg.c_str());
+  int node = myObject["node"];
+  double lat = myObject["latitude"];
+  double lng = myObject["longitude"];
+  Serial.print("Node: ");
+  Serial.println(node);
+  Serial.print("Latitude: ");
+  Serial.print(lat);
+  Serial.println(" ");
+  Serial.print("Longitude: ");
+  Serial.print(lng);
+  Serial.println(" ");
+}
+
+void newConnectionCallback(uint32_t nodeId) {
+  Serial.printf("New Connection, nodeId = %u\n", nodeId);
+}
+
+void changedConnectionCallback() {
+  Serial.printf("Changed connections\n");
+}
+
+void nodeTimeAdjustedCallback(int32_t offset) {
+  Serial.printf("Adjusted time %u. Offset = %d\n", mesh.getNodeTime(),offset);
+}
+
+void updateSerial(){
+  delay(500);
+  while (Serial.available())  {
+    Serial2.write(Serial.read());//Forward what Serial received to Software Serial Port
+    
+  }
+  while (Serial2.available())  {
+    Serial.write(Serial2.read());//Forward what Software Serial received to Serial Port
+  }
+}
+
+void setup() {
+  Serial2.begin(9600);
+  delay(3000);
+  Serial.begin(115200);
+
+  pinMode(trigPin, OUTPUT); // Sets the trigPin as an Output
+  pinMode(echoPin, INPUT); // Sets the echoPin as an Input
+
+  //mesh.setDebugMsgTypes( ERROR | MESH_STATUS | CONNECTION | SYNC | COMMUNICATION | GENERAL | MSG_TYPES | REMOTE ); // all types on
+  mesh.setDebugMsgTypes( ERROR | STARTUP );  // set before init() so that you can see startup messages
+
+  mesh.init( MESH_PREFIX, MESH_PASSWORD, &userScheduler, MESH_PORT );
+  mesh.onReceive(&receivedCallback);
+  mesh.onNewConnection(&newConnectionCallback);
+  mesh.onChangedConnections(&changedConnectionCallback);
+  mesh.onNodeTimeAdjusted(&nodeTimeAdjustedCallback);
+
+  userScheduler.addTask(taskSendMessage);
+  taskSendMessage.enable();
+}
+
+void loop() {
+  updateSerial();
+  while (Serial2.available() > 0)
+    // if (gps.encode(Serial2.read()))
+      displayInfo();
+  // if (millis() > 5000 && gps.charsProcessed() < 10)
+  {
+    // Serial.println(F("No GPS detected: check wiring."));
+    // while (true);
+  }
+  // it will run the user scheduler as well
+  mesh.update();
+
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  // Sets the trigPin on HIGH state for 10 micro seconds
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  
+  // Reads the echoPin, returns the sound wave travel time in microseconds
+  duration = pulseIn(echoPin, HIGH);
+  
+  // Calculate the distance
+  distanceCm = duration * SOUND_SPEED/2; 
+  if(distanceCm <= 100){
+  Serial.printf("Warning, object ");
+  Serial.print(distanceCm);  
+  Serial.printf(" ahead\t");    
+  }
+}
